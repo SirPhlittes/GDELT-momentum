@@ -327,3 +327,4 @@ def parse_boolean_query(expression: str) -> ParsedQuery:
     parser = BooleanParser()
     return parser.parse(expression)
 
+

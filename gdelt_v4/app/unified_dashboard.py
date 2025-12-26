@@ -1,19 +1,26 @@
 """
-GDELT v4.3.1 Unified Intelligence Dashboard - Command Center
-==============================================================
-"Broken Circuit" Fix - Stable Globe & Chronos Replay
+GDELT v4.4 Unified Intelligence Dashboard - Command Center
+============================================================
+Multidimensional Analysis Update
 
-v4.3.1 Fixes:
+v4.4 Features:
+- Layer Selector: Tactical Momentum, Bivariate Crisis, Conflict Hubs
+- @st.fragment: Smooth layer switching without full reload
+- Bivariate Crisis Map: 3x3 Sentiment × Momentum color matrix
+- Conflict Hubs: Protest/Conflict event visualization
+- Source Trust Stacked Area Chart: Tier distribution over time
+- Enhanced tooltips with Z-Score
+
+v4.3.1 Fixes (retained):
 - SQL: GEO_TEMPORAL_DAILY template with record_date for Chronos
-- Temporal: Robust handling when record_date is missing (static fallback)
+- Temporal: Robust handling when record_date is missing
 - Mapping: Centroid fallback when lat/lon is 0 or NULL
 - Mapbox: Token check with dark theme fallback
-- UI: Improved replay status and "No Data" overlays
 
 Run with: streamlit run gdelt_v4/app/unified_dashboard.py
 
 Author: Philip Hendrik Littau
-Version: 4.3.1
+Version: 4.4.0
 """
 
 import streamlit as st
@@ -67,6 +74,14 @@ from gdelt_v4.mapping.geospatial import (
     TemporalFadingEngine,
     get_command_center_css,
     PYDECK_AVAILABLE,
+    # v4.4: Multidimensional analysis
+    LayerMode,
+    get_bivariate_color,
+    apply_bivariate_colors,
+    apply_conflict_colors,
+    get_bivariate_legend_html,
+    BIVARIATE_COLOR_MATRIX,
+    CONFLICT_COLORS,
 )
 from gdelt_v4.mapping.country_codes import (
     get_mapper as get_country_mapper,
@@ -677,7 +692,7 @@ st.markdown(f"""
     <div class="header-brand">
         <span class="header-icon">◉</span>
         <span class="header-title">GDELT FORECAST LAB</span>
-        <span class="header-version">v4.3.1 · COMMAND CENTER</span>
+        <span class="header-version">v4.4 · MULTIDIMENSIONAL</span>
     </div>
     <div class="header-time">{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</div>
 </div>
@@ -846,8 +861,145 @@ with tabs[0]:
 
 
 # =============================================================================
-# TAB 1: COMMAND CENTER (Fused GAIA + CHRONOS)
+# TAB 1: COMMAND CENTER (Fused GAIA + CHRONOS) - v4.4 Multidimensional
 # =============================================================================
+
+# v4.4: Initialize layer mode in session state
+if "layer_mode" not in st.session_state:
+    st.session_state.layer_mode = LayerMode.TACTICAL_MOMENTUM
+
+
+@st.fragment
+def render_command_center_globe_fragment(
+    layer_mode: str,
+    globe_df: pd.DataFrame,
+    current_timestamp: datetime,
+    current_slice,
+):
+    """
+    v4.4: Fragment for isolated re-rendering of globe visualization.
+    
+    This fragment enables smooth layer switching and temporal replay
+    without full app reload.
+    """
+    if globe_df.empty:
+        st.markdown("""
+        <div style="text-align: center; padding: 80px; background: #0A0A0A; border: 1px solid #2A2A2A; border-radius: 2px;">
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5A5A5A;">
+                NO DATA FOR THIS FRAME
+            </div>
+            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #3A3A3A; margin-top: 8px;">
+                Adjust temporal position or check query
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+    
+    # Apply colors based on layer mode
+    if layer_mode == LayerMode.BIVARIATE_CRISIS:
+        # v4.4: Bivariate Crisis Map - Sentiment × Momentum
+        globe_df = apply_bivariate_colors(
+            globe_df,
+            sentiment_col="sentiment_score",
+            momentum_col="momentum_zscore",
+        )
+    elif layer_mode == LayerMode.CONFLICT_HUBS:
+        # v4.4: Conflict Hubs - Protest/Conflict colors
+        globe_df = apply_conflict_colors(
+            globe_df,
+            protest_col="protest_count",
+            conflict_col="conflict_count",
+        )
+    else:
+        # Default: Tactical Momentum with temporal fading
+        fading_engine = TemporalFadingEngine(decay_window_hours=72)
+        
+        if "record_date" in globe_df.columns:
+            globe_df = fading_engine.apply_to_dataframe(globe_df, current_timestamp)
+        else:
+            globe_df["_color_r"] = 125
+            globe_df["_color_g"] = 154
+            globe_df["_color_b"] = 125
+            globe_df["_color_a"] = 200
+    
+    # Calculate radius based on mention count
+    size_col = "mention_count" if "mention_count" in globe_df.columns else "total_events"
+    if size_col in globe_df.columns:
+        max_mc = globe_df[size_col].max()
+        globe_df["_radius"] = (globe_df[size_col] / max(max_mc, 1)) * 80000 + 20000
+    else:
+        globe_df["_radius"] = 50000
+    
+    # Create pydeck layer
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=globe_df,
+        get_position=["longitude", "latitude"],
+        get_radius="_radius",
+        radius_scale=1,
+        radius_min_pixels=4,
+        radius_max_pixels=45,
+        get_fill_color=["_color_r", "_color_g", "_color_b", "_color_a"],
+        pickable=True,
+        opacity=0.9,
+        stroked=True,
+        get_line_color=[255, 255, 255, 40],
+        line_width_min_pixels=1,
+    )
+    
+    view_state = pdk.ViewState(
+        latitude=20,
+        longitude=0,
+        zoom=1.3,
+        pitch=40,
+        bearing=0,
+    )
+    
+    # v4.4: Check for Mapbox token, fallback to dark theme
+    mapbox_token = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
+    map_style = "mapbox://styles/mapbox/satellite-v9" if mapbox_token else "dark"
+    
+    # v4.4: Enhanced tooltips with momentum Z-score
+    tooltip_html = """<div style="font-family: 'IBM Plex Mono'; font-size: 11px;">
+        <b style="color: #7D9A7D;">{country_name}</b><br/>
+        Mentions: {mention_count}<br/>
+        Sentiment: {sentiment_score}<br/>
+        Momentum: {momentum_zscore}σ
+    </div>"""
+    
+    deck = pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        map_style=map_style,
+        tooltip={
+            "html": tooltip_html,
+            "style": {
+                "backgroundColor": "#0A0A0A",
+                "color": "#E6EDF3",
+                "padding": "10px",
+                "border": "1px solid #2A2A2A",
+                "borderRadius": "2px",
+            },
+        },
+    )
+    
+    st.pydeck_chart(deck, use_container_width=True, height=480)
+    
+    # v4.4: Show layer-specific legend
+    if layer_mode == LayerMode.BIVARIATE_CRISIS:
+        st.markdown(get_bivariate_legend_html(), unsafe_allow_html=True)
+    elif layer_mode == LayerMode.CONFLICT_HUBS:
+        st.markdown("""
+        <div style="font-family: 'IBM Plex Mono'; font-size: 9px; color: #5A5A5A; display: flex; gap: 16px; margin-top: 8px;">
+            <span><span style="color: rgb(255,180,100);">●</span> Protest</span>
+            <span><span style="color: rgb(212,74,74);">●</span> Conflict</span>
+            <span><span style="color: rgb(255,138,101);">●</span> Mixed</span>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    if not mapbox_token:
+        st.caption("ℹ️ Set MAPBOX_ACCESS_TOKEN for satellite view")
+
 
 with tabs[1]:
     if not st.session_state.results:
@@ -893,6 +1045,26 @@ with tabs[1]:
             current_timestamp = datetime.strptime(current_date, "%Y-%m-%d")
             frame = engine.get_frame(temporal_result, current_timestamp)
             
+            # ===== v4.4: LAYER SELECTOR HUD =====
+            layer_col, spacer_col = st.columns([2, 5])
+            with layer_col:
+                layer_mode = st.selectbox(
+                    "VISUALIZATION LAYER",
+                    [
+                        LayerMode.TACTICAL_MOMENTUM,
+                        LayerMode.BIVARIATE_CRISIS,
+                        LayerMode.CONFLICT_HUBS,
+                    ],
+                    format_func=lambda x: {
+                        LayerMode.TACTICAL_MOMENTUM: "🔥 Tactical Momentum",
+                        LayerMode.BIVARIATE_CRISIS: "⚡ Bivariate Crisis Map",
+                        LayerMode.CONFLICT_HUBS: "⚔️ Conflict Hubs",
+                    }.get(x, str(x)),
+                    key="cc_layer_selector",
+                    label_visibility="collapsed",
+                )
+                st.session_state.layer_mode = layer_mode
+            
             # ===== GLOBE CONTAINER =====
             st.markdown('<div class="command-center-container">', unsafe_allow_html=True)
             
@@ -903,7 +1075,7 @@ with tabs[1]:
             col_main, col_hud = st.columns([3, 1])
             
             with col_main:
-                # v4.3.1: Globe rendering with centroid fallback and Mapbox token handling
+                # v4.4: Globe rendering with Layer Selector and Fragment pattern
                 if pdk is not None:
                     # Prepare source data
                     source_df = frame.all_events if not frame.all_events.empty else geo_data
@@ -921,92 +1093,13 @@ with tabs[1]:
                     
                     globe_df = prepare_geo_data_for_globe(source_df)
                     
-                    if not globe_df.empty:
-                        # Apply temporal fading colors
-                        fading_engine = TemporalFadingEngine(decay_window_hours=72)
-                        
-                        if "record_date" in globe_df.columns:
-                            globe_df = fading_engine.apply_to_dataframe(globe_df, current_timestamp)
-                        else:
-                            globe_df["_color_r"] = 125
-                            globe_df["_color_g"] = 154
-                            globe_df["_color_b"] = 125
-                            globe_df["_color_a"] = 200
-                        
-                        if "mention_count" in globe_df.columns:
-                            max_mc = globe_df["mention_count"].max()
-                            globe_df["_radius"] = (globe_df["mention_count"] / max(max_mc, 1)) * 80000 + 20000
-                        else:
-                            globe_df["_radius"] = 50000
-                        
-                        layer = pdk.Layer(
-                            "ScatterplotLayer",
-                            data=globe_df,
-                            get_position=["longitude", "latitude"],
-                            get_radius="_radius",
-                            radius_scale=1,
-                            radius_min_pixels=4,
-                            radius_max_pixels=45,
-                            get_fill_color=["_color_r", "_color_g", "_color_b", "_color_a"],
-                            pickable=True,
-                            opacity=0.9,
-                            stroked=True,
-                            get_line_color=[255, 255, 255, 40],
-                            line_width_min_pixels=1,
-                        )
-                        
-                        view_state = pdk.ViewState(
-                            latitude=20,
-                            longitude=0,
-                            zoom=1.3,
-                            pitch=40,
-                            bearing=0,
-                        )
-                        
-                        # v4.3.1: Check for Mapbox token, fallback to dark theme
-                        mapbox_token = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
-                        if mapbox_token:
-                            map_style = "mapbox://styles/mapbox/satellite-v9"
-                        else:
-                            map_style = "dark"
-                        
-                        deck = pdk.Deck(
-                            layers=[layer],
-                            initial_view_state=view_state,
-                            map_style=map_style,
-                            tooltip={
-                                "html": """<div style="font-family: 'IBM Plex Mono'; font-size: 11px;">
-                                    <b style="color: #7D9A7D;">{country_name}</b><br/>
-                                    Mentions: {mention_count}<br/>
-                                    Sentiment: {sentiment_score}
-                                </div>""",
-                                "style": {
-                                    "backgroundColor": "#0A0A0A",
-                                    "color": "#E6EDF3",
-                                    "padding": "10px",
-                                    "border": "1px solid #2A2A2A",
-                                    "borderRadius": "2px",
-                                },
-                            },
-                        )
-                        
-                        st.pydeck_chart(deck, use_container_width=True, height=480)
-                        
-                        # v4.3.1: Show warning if no Mapbox token
-                        if not mapbox_token:
-                            st.caption("ℹ️ Set MAPBOX_ACCESS_TOKEN for satellite view")
-                    else:
-                        # v4.3.1: Show "No Data" overlay in Obsidian style
-                        st.markdown("""
-                        <div style="text-align: center; padding: 80px; background: #0A0A0A; border: 1px solid #2A2A2A; border-radius: 2px;">
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5A5A5A;">
-                                NO DATA FOR THIS FRAME
-                            </div>
-                            <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #3A3A3A; margin-top: 8px;">
-                                Adjust temporal position or check query
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    # v4.4: Render globe with fragment pattern for smooth updates
+                    render_command_center_globe_fragment(
+                        layer_mode=layer_mode,
+                        globe_df=globe_df,
+                        current_timestamp=current_timestamp,
+                        current_slice=current_slice,
+                    )
                 else:
                     # Fallback to Plotly choropleth
                     if "iso3" in geo_data.columns:
@@ -1252,7 +1345,7 @@ with tabs[3]:
 
 
 # =============================================================================
-# TAB 4: INTEGRITY
+# TAB 4: INTEGRITY - v4.4 with Stacked Area Chart
 # =============================================================================
 
 with tabs[4]:
@@ -1280,7 +1373,92 @@ with tabs[4]:
             st.markdown("")
             
             source_df = first_result.source_trust.df
+            
+            # v4.4: Stacked Area Chart for Source Trust over Time
             if not source_df.empty and "tier" in source_df.columns:
+                st.markdown("##### Source Trust Timeline")
+                
+                # Check if temporal data is available
+                if "record_date" in source_df.columns:
+                    # Aggregate by date and tier
+                    tier_daily = source_df.groupby(["record_date", "tier"])["mention_count"].sum().reset_index()
+                    tier_daily = tier_daily.pivot(index="record_date", columns="tier", values="mention_count").fillna(0)
+                    tier_daily = tier_daily.reset_index()
+                    
+                    # Rename columns for display
+                    tier_names = {1: "Tier 1 (Verified)", 2: "Tier 2 (General)", 3: "Tier 3 (Unverified)"}
+                    tier_colors = {
+                        "Tier 1 (Verified)": GAIA_PALETTE["muted_sage"],
+                        "Tier 2 (General)": GAIA_PALETTE["slate_blue"],
+                        "Tier 3 (Unverified)": GAIA_PALETTE["accent_alert"],
+                    }
+                    
+                    fig = go.Figure()
+                    
+                    for tier in [1, 2, 3]:
+                        if tier in tier_daily.columns:
+                            fig.add_trace(go.Scatter(
+                                x=tier_daily["record_date"],
+                                y=tier_daily[tier],
+                                name=tier_names.get(tier, f"Tier {tier}"),
+                                mode="lines",
+                                stackgroup="one",
+                                fillcolor=tier_colors.get(tier_names.get(tier), "#5A5A5A"),
+                                line=dict(color=tier_colors.get(tier_names.get(tier), "#5A5A5A"), width=0),
+                            ))
+                    
+                    fig.update_layout(
+                        height=280,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(family="IBM Plex Mono", color="#5A5A5A", size=9),
+                        margin=dict(l=40, r=20, t=30, b=30),
+                        xaxis=dict(
+                            gridcolor="#1F1F1F",
+                            linecolor="#2A2A2A",
+                            title="",
+                        ),
+                        yaxis=dict(
+                            gridcolor="#1F1F1F",
+                            linecolor="#2A2A2A",
+                            title="Volume",
+                        ),
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="left",
+                            x=0,
+                            font=dict(size=9),
+                            bgcolor="rgba(0,0,0,0)",
+                        ),
+                        hovermode="x unified",
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True, key="integrity_stacked_area")
+                else:
+                    # Fallback: Show tier distribution as bar chart
+                    tier_totals = source_df.groupby("tier")["mention_count"].sum().reset_index()
+                    tier_totals["tier_name"] = tier_totals["tier"].map({1: "Verified", 2: "General", 3: "Unverified"})
+                    
+                    fig = go.Figure(go.Bar(
+                        x=tier_totals["tier_name"],
+                        y=tier_totals["mention_count"],
+                        marker_color=[GAIA_PALETTE["muted_sage"], GAIA_PALETTE["slate_blue"], GAIA_PALETTE["accent_alert"]],
+                    ))
+                    
+                    fig.update_layout(
+                        height=200,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(family="IBM Plex Mono", color="#5A5A5A", size=9),
+                        margin=dict(l=40, r=20, t=10, b=30),
+                        xaxis=dict(gridcolor="#1F1F1F", linecolor="#2A2A2A"),
+                        yaxis=dict(gridcolor="#1F1F1F", linecolor="#2A2A2A", title="Volume"),
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True, key="integrity_tier_bar")
+                
                 st.markdown("##### TOP DOMAINS BY TIER")
                 for tier in [1, 2, 3]:
                     tier_data = source_df[source_df["tier"] == tier].nlargest(3, "mention_count")
@@ -1300,7 +1478,7 @@ st.markdown("---")
 st.markdown("""
 <div style="display: flex; justify-content: space-between; align-items: center;">
     <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #5A5A5A;">
-        GDELT FORECAST LAB v4.3.1 · "BROKEN CIRCUIT" FIX · 2025
+        GDELT FORECAST LAB v4.4 · MULTIDIMENSIONAL INTELLIGENCE · 2025
     </span>
     <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #5A7D9A;">
         GAIA · CHRONOS · DEEP TECH INTELLIGENCE

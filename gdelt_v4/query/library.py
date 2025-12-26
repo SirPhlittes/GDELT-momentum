@@ -275,3 +275,4 @@ def validate_assembled_query(query: str, max_length: int = 500) -> Tuple[bool, s
     
     return True, ""
 
+

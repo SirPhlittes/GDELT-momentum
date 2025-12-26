@@ -4,3 +4,4 @@ from gdelt_v4.services.gdelt_service import GDELTService
 
 __all__ = ["GDELTService"]
 
+

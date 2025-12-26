@@ -1,17 +1,26 @@
-# GDELT Momentum Engine v4.0
+# GDELT Momentum Engine v4.4
 
 🌐 **A modular, scalable Python framework for geopolitical intelligence analysis using GDELT's Global Knowledge Graph (GKG)**
 
-[![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)](https://github.com/yourusername/gdelt-momentum-engine)
+[![Version](https://img.shields.io/badge/version-4.4.0-blue.svg)](https://github.com/SirPhlittes/GDELT)
 [![Python](https://img.shields.io/badge/python-3.8+-green.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
 ---
 
-## 🚀 What's New in v4.0
+## 🚀 What's New in v4.4
 
-**Complete architectural refactoring** from monolithic scripts to a modular, production-ready framework:
+**Multidimensional Intelligence Update** with enhanced visualization layers:
 
+### v4.4 New Features
+- ✅ **Layer Selector** - Switch between Tactical Momentum, Bivariate Crisis, and Conflict Hubs
+- ✅ **Bivariate Crisis Map** - 3x3 Sentiment × Momentum color matrix for crisis detection
+- ✅ **Conflict Hubs** - CAMEO 14/18/19 event visualization (Protest, Conflict)
+- ✅ **@st.fragment Pattern** - Smooth layer switching without full app reload
+- ✅ **Source Trust Stacked Area Chart** - Tier distribution over time
+- ✅ **Enhanced Tooltips** - Now include Momentum Z-Score
+
+### v4.0 Foundation (Retained)
 - ✅ **Unified BigQuery Connector** - Single entry point replacing 5 redundant implementations
 - ✅ **Fixed Boolean Query Parser** - Correct AND/OR/NOT logic with multi-conditional SQL
 - ✅ **Multi-Mode Momentum Engine** - Basic, Sentiment-Weighted, Entity-Level, Tier-Specific
@@ -585,5 +594,5 @@ For issues, questions, or contributions, please open an issue on GitHub.
 
 ---
 
-**Version**: 4.0.0  
+**Version**: 4.4.0  
 **Last Updated**: December 2025

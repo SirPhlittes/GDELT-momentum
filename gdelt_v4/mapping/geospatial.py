@@ -1,16 +1,18 @@
 """
-GDELT v4.3 Geospatial Module (GAIA)
+GDELT v4.4 Geospatial Module (GAIA)
 ====================================
-3D tactical globe visualization with temporal fading.
+3D tactical globe visualization with multidimensional analysis.
 
 Features:
 - 3D globe with satellite basemap
 - Temporal fading engine (events fade based on age)
-- Dynamic opacity calculation
+- Bivariate Crisis Map (3x3 Sentiment × Momentum matrix)
+- Conflict Hubs visualization
+- Layer Selector integration
 - Command Center integration
 
 Author: Philip Hendrik Littau
-Version: 4.3.0
+Version: 4.4.0
 """
 
 from typing import Dict, List, Any, Optional, Tuple
@@ -59,6 +61,252 @@ GAIA_PALETTE = {
     "old": [90, 125, 154, 100],           # Slate Blue - more faded
     "ancient": [90, 125, 154, 50],        # Slate Blue - almost gone
 }
+
+
+# =============================================================================
+# v4.4: LAYER MODES & BIVARIATE COLOR MATRIX
+# =============================================================================
+
+class LayerMode:
+    """Available visualization layer modes for Command Center."""
+    TACTICAL_MOMENTUM = "tactical_momentum"   # Standard heatmap
+    BIVARIATE_CRISIS = "bivariate_crisis"     # Sentiment × Momentum 3x3 matrix
+    CONFLICT_HUBS = "conflict_hubs"           # CAMEO 14/18/19 bubble map
+
+
+# Bivariate 3x3 Color Matrix (Sentiment × Momentum)
+# 
+# Matrix Layout:
+#                 Momentum
+#                 Low (< -1)  |  Medium (-1 to 1)  |  High (> 1)
+# Sentiment:
+# Negative (<-1)  [Crisis]     |  [Warning]          |  [Alert]
+# Neutral (-1,1)  [Quiet]      |  [Stable]           |  [Rising]  
+# Positive (>1)   [Recovering] |  [Positive]         |  [Surge]
+#
+BIVARIATE_COLOR_MATRIX = {
+    # (sentiment_bin, momentum_bin): [R, G, B, A]
+    # sentiment_bin: -1 (negative), 0 (neutral), 1 (positive)
+    # momentum_bin: -1 (low), 0 (medium), 1 (high)
+    
+    # Negative sentiment row (crisis spectrum)
+    (-1, -1): [140, 70, 70, 200],     # Dark red - Quiet crisis
+    (-1, 0): [212, 74, 74, 255],      # Dull Coral - Warning
+    (-1, 1): [255, 138, 101, 255],    # Orange - Active crisis/Alert
+    
+    # Neutral sentiment row (activity spectrum)
+    (0, -1): [70, 70, 70, 150],       # Dark gray - Quiet
+    (0, 0): [90, 125, 154, 200],      # Slate Blue - Stable
+    (0, 1): [116, 165, 212, 255],     # Light Blue - Rising attention
+    
+    # Positive sentiment row (growth spectrum)
+    (1, -1): [100, 130, 100, 180],    # Muted dark green - Recovering
+    (1, 0): [125, 154, 125, 220],     # Muted Sage - Positive stable
+    (1, 1): [200, 230, 200, 255],     # Bright sage - Surge
+}
+
+# Conflict Hub colors
+CONFLICT_COLORS = {
+    "protest": [255, 180, 100, 255],   # Amber for protests
+    "conflict": [212, 74, 74, 255],    # Coral for conflicts
+    "mixed": [255, 138, 101, 255],     # Orange for mixed
+}
+
+
+def get_bivariate_color(
+    sentiment: float,
+    momentum: float,
+    sentiment_thresholds: Tuple[float, float] = (-1.0, 1.0),
+    momentum_thresholds: Tuple[float, float] = (-1.0, 1.0),
+) -> List[int]:
+    """
+    Map sentiment and momentum to 3x3 bivariate color matrix.
+    
+    The matrix visualizes the relationship between emotional tone (sentiment)
+    and attention intensity (momentum Z-score).
+    
+    Args:
+        sentiment: Sentiment score (-10 to +10, typically -5 to +5)
+        momentum: Momentum Z-score (typically -3 to +3)
+        sentiment_thresholds: (low, high) thresholds for binning
+        momentum_thresholds: (low, high) thresholds for binning
+        
+    Returns:
+        RGBA color [R, G, B, A] from the bivariate matrix
+        
+    Example:
+        >>> color = get_bivariate_color(sentiment=-2.5, momentum=1.8)
+        >>> # Returns orange (negative sentiment, high momentum) = Active crisis
+    """
+    # Handle NaN/None values
+    if pd.isna(sentiment):
+        sentiment = 0.0
+    if pd.isna(momentum):
+        momentum = 0.0
+    
+    # Bin sentiment: -1 (negative), 0 (neutral), +1 (positive)
+    if sentiment < sentiment_thresholds[0]:
+        sent_bin = -1
+    elif sentiment > sentiment_thresholds[1]:
+        sent_bin = 1
+    else:
+        sent_bin = 0
+    
+    # Bin momentum: -1 (low), 0 (medium), +1 (high)
+    if momentum < momentum_thresholds[0]:
+        mom_bin = -1
+    elif momentum > momentum_thresholds[1]:
+        mom_bin = 1
+    else:
+        mom_bin = 0
+    
+    # Look up color in matrix
+    return BIVARIATE_COLOR_MATRIX.get((sent_bin, mom_bin), [90, 125, 154, 200])
+
+
+def apply_bivariate_colors(
+    df: pd.DataFrame,
+    sentiment_col: str = "sentiment_score",
+    momentum_col: str = "momentum_zscore",
+    sentiment_thresholds: Tuple[float, float] = (-1.0, 1.0),
+    momentum_thresholds: Tuple[float, float] = (-1.0, 1.0),
+) -> pd.DataFrame:
+    """
+    Apply bivariate crisis colors to a DataFrame.
+    
+    Adds columns: _color_r, _color_g, _color_b, _color_a
+    
+    Args:
+        df: DataFrame with sentiment and momentum columns
+        sentiment_col: Name of sentiment column
+        momentum_col: Name of momentum column
+        sentiment_thresholds: Thresholds for sentiment binning
+        momentum_thresholds: Thresholds for momentum binning
+        
+    Returns:
+        DataFrame with color columns added
+    """
+    if df.empty:
+        return df
+    
+    result = df.copy()
+    
+    # Ensure columns exist with defaults
+    if sentiment_col not in result.columns:
+        result[sentiment_col] = 0.0
+    if momentum_col not in result.columns:
+        result[momentum_col] = 0.0
+    
+    # Apply bivariate colors
+    colors = result.apply(
+        lambda row: get_bivariate_color(
+            row.get(sentiment_col, 0.0),
+            row.get(momentum_col, 0.0),
+            sentiment_thresholds,
+            momentum_thresholds,
+        ),
+        axis=1
+    )
+    
+    result["_color_r"] = colors.apply(lambda c: c[0])
+    result["_color_g"] = colors.apply(lambda c: c[1])
+    result["_color_b"] = colors.apply(lambda c: c[2])
+    result["_color_a"] = colors.apply(lambda c: c[3])
+    
+    return result
+
+
+def apply_conflict_colors(
+    df: pd.DataFrame,
+    protest_col: str = "protest_count",
+    conflict_col: str = "conflict_count",
+) -> pd.DataFrame:
+    """
+    Apply conflict hub colors based on event type distribution.
+    
+    Args:
+        df: DataFrame with protest and conflict counts
+        protest_col: Name of protest count column
+        conflict_col: Name of conflict count column
+        
+    Returns:
+        DataFrame with color columns added
+    """
+    if df.empty:
+        return df
+    
+    result = df.copy()
+    
+    # Ensure columns exist
+    if protest_col not in result.columns:
+        result[protest_col] = 0
+    if conflict_col not in result.columns:
+        result[conflict_col] = 0
+    
+    def get_conflict_color(row):
+        protest = row.get(protest_col, 0) or 0
+        conflict = row.get(conflict_col, 0) or 0
+        total = protest + conflict
+        
+        if total == 0:
+            return [90, 90, 90, 100]  # Gray for no events
+        
+        # Determine dominant type
+        if protest > conflict * 1.5:
+            return CONFLICT_COLORS["protest"]
+        elif conflict > protest * 1.5:
+            return CONFLICT_COLORS["conflict"]
+        else:
+            return CONFLICT_COLORS["mixed"]
+    
+    colors = result.apply(get_conflict_color, axis=1)
+    
+    result["_color_r"] = colors.apply(lambda c: c[0])
+    result["_color_g"] = colors.apply(lambda c: c[1])
+    result["_color_b"] = colors.apply(lambda c: c[2])
+    result["_color_a"] = colors.apply(lambda c: c[3])
+    
+    return result
+
+
+def get_bivariate_legend_html() -> str:
+    """
+    Generate HTML legend for bivariate crisis map.
+    
+    Returns:
+        HTML string for the 3x3 legend
+    """
+    return """
+    <div style="font-family: 'IBM Plex Mono', monospace; padding: 8px; background: rgba(5,5,5,0.9); border: 1px solid #2A2A2A; border-radius: 2px;">
+        <div style="font-size: 9px; color: #5A5A5A; text-transform: uppercase; margin-bottom: 8px;">
+            Bivariate Crisis Matrix
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; font-size: 8px;">
+            <div></div>
+            <div style="color: #5A5A5A; text-align: center;">Low</div>
+            <div style="color: #5A5A5A; text-align: center;">Med</div>
+            <div style="color: #5A5A5A; text-align: center;">High</div>
+            
+            <div style="color: #D47474;">Neg</div>
+            <div style="width: 16px; height: 16px; background: rgb(140,70,70);"></div>
+            <div style="width: 16px; height: 16px; background: rgb(212,74,74);"></div>
+            <div style="width: 16px; height: 16px; background: rgb(255,138,101);"></div>
+            
+            <div style="color: #5A7D9A;">Neu</div>
+            <div style="width: 16px; height: 16px; background: rgb(70,70,70);"></div>
+            <div style="width: 16px; height: 16px; background: rgb(90,125,154);"></div>
+            <div style="width: 16px; height: 16px; background: rgb(116,165,212);"></div>
+            
+            <div style="color: #7D9A7D;">Pos</div>
+            <div style="width: 16px; height: 16px; background: rgb(100,130,100);"></div>
+            <div style="width: 16px; height: 16px; background: rgb(125,154,125);"></div>
+            <div style="width: 16px; height: 16px; background: rgb(200,230,200);"></div>
+        </div>
+        <div style="font-size: 7px; color: #3A3A3A; margin-top: 6px;">
+            Rows: Sentiment · Cols: Momentum
+        </div>
+    </div>
+    """
 
 
 # =============================================================================

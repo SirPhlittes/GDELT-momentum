@@ -356,3 +356,4 @@ class BaseGDELTConnector(ABC):
         )
         return False
 
+

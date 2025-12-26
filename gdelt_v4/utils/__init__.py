@@ -5,3 +5,4 @@ from gdelt_v4.utils.validators import validate_date_range, validate_sample_perce
 
 __all__ = ["setup_logging", "get_logger", "validate_date_range", "validate_sample_percent"]
 
+

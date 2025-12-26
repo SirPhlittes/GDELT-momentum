@@ -437,3 +437,4 @@ class UnifiedConnector(BaseGDELTConnector):
             return self._cache.stats()
         return {"enabled": False}
 
+

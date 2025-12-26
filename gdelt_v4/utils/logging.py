@@ -139,3 +139,4 @@ class LogContext:
         logging.setLogRecordFactory(self._old_factory)
         return False
 
+

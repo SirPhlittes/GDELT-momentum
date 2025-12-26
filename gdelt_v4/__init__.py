@@ -1,5 +1,5 @@
 """
-GDELT Momentum Engine v4.0
+GDELT Momentum Engine v4.4
 ==========================
 A modular, scalable Python framework for geopolitical intelligence analysis.
 
@@ -9,13 +9,14 @@ This package provides:
 - Multi-mode momentum engine (Basic, Sentiment-Weighted, Entity-Level)
 - Standardized data models with consistent field naming
 - Service facade for clean dashboard integration
+- v4.4: Multidimensional analysis (Bivariate Crisis Map, Conflict Hubs)
 
 Author: Philip Hendrik Littau
-Version: 4.0.0
+Version: 4.4.0
 License: MIT
 """
 
-__version__ = "4.0.0"
+__version__ = "4.4.0"
 __author__ = "Philip Hendrik Littau"
 
 # Configuration

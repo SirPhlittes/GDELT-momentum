@@ -4,3 +4,4 @@ from gdelt_v4.config.settings import GDELTConfig, LogConfig, CacheConfig, BigQue
 
 __all__ = ["GDELTConfig", "LogConfig", "CacheConfig", "BigQueryConfig"]
 
+

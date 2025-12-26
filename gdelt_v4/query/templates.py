@@ -1,11 +1,12 @@
 """
-GDELT v4.3.1 SQL Templates
-===========================
+GDELT v4.4 SQL Templates
+=========================
 Centralized SQL template definitions for GDELT queries.
 
-v4.3.1 "Broken Circuit" Fix:
-- GEO_TEMPORAL_DAILY: New template with record_date for Chronos
-- All geo templates now support temporal slicing
+v4.4 "Multidimensional" Update:
+- GEO_AGGREGATE_COUNTRY: Now includes record_date for temporal sync
+- CONFLICT_EVENTS_TEMPORAL: Daily conflict data with record_date
+- All geo templates support temporal slicing and Layer Selector
 
 Templates use Python format strings with named placeholders for:
 - table: Fully qualified table ID
@@ -15,7 +16,7 @@ Templates use Python format strings with named placeholders for:
 - sample_clause: Optional sampling filter
 
 Author: Philip Hendrik Littau
-Version: 4.3.1
+Version: 4.4.0
 """
 
 from __future__ import annotations
@@ -90,13 +91,15 @@ class SQLTemplates:
     # GEOGRAPHIC TEMPLATES
     # =========================================================================
     
+    # v4.4: GEO_AGGREGATE_COUNTRY now includes record_date for temporal sync
     GEO_AGGREGATE_COUNTRY = """
     SELECT
+        DATE(_PARTITIONTIME) AS record_date,
         SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(2)] AS country_code,
         COUNT(*) AS mention_count,
         AVG(SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64)) AS sentiment_score,
-        AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(5)] AS FLOAT64)) AS latitude,
-        AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(6)] AS FLOAT64)) AS longitude
+        SAFE_CAST(AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(5)] AS FLOAT64)) AS FLOAT64) AS latitude,
+        SAFE_CAST(AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(6)] AS FLOAT64)) AS FLOAT64) AS longitude
     FROM `{table}`
     WHERE
         {partition_filter}
@@ -104,9 +107,9 @@ class SQLTemplates:
         AND V2Locations IS NOT NULL
         AND V2Locations != ''
         {sample_clause}
-    GROUP BY country_code
+    GROUP BY record_date, country_code
     HAVING country_code IS NOT NULL AND country_code != ''
-    ORDER BY mention_count DESC
+    ORDER BY record_date, mention_count DESC
     """
     
     # v4.3.1: Temporal geo data with record_date for Chronos replay
@@ -291,11 +294,34 @@ class SQLTemplates:
     # CONFLICT/PROTEST TEMPLATES
     # =========================================================================
     
+    # v4.4: CONFLICT_EVENTS with record_date for Layer Selector temporal sync
     CONFLICT_EVENTS = """
     SELECT
+        DATE(_PARTITIONTIME) AS record_date,
         SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(2)] AS country_code,
-        AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(5)] AS FLOAT64)) AS latitude,
-        AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(6)] AS FLOAT64)) AS longitude,
+        SAFE_CAST(AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(5)] AS FLOAT64)) AS FLOAT64) AS latitude,
+        SAFE_CAST(AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(6)] AS FLOAT64)) AS FLOAT64) AS longitude,
+        COUNT(*) AS total_events,
+        SUM(CASE WHEN REGEXP_CONTAINS(V2Themes, r'(?i)(PROTEST|DEMONSTRATION|RIOT|STRIKE)') THEN 1 ELSE 0 END) AS protest_count,
+        SUM(CASE WHEN REGEXP_CONTAINS(V2Themes, r'(?i)(CONFLICT|WAR|VIOLENCE|ATTACK)') THEN 1 ELSE 0 END) AS conflict_count,
+        AVG(SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64)) AS sentiment_score
+    FROM `{table}`
+    WHERE
+        {partition_filter}
+        AND ({conditions})
+        AND REGEXP_CONTAINS(V2Themes, r'(?i)(PROTEST|DEMONSTRATION|RIOT|STRIKE|CONFLICT|WAR|VIOLENCE|ATTACK)')
+        {sample_clause}
+    GROUP BY record_date, country_code
+    HAVING country_code IS NOT NULL AND country_code != ''
+    ORDER BY record_date, total_events DESC
+    """
+    
+    # Aggregated conflict without temporal dimension (for summary views)
+    CONFLICT_EVENTS_AGGREGATE = """
+    SELECT
+        SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(2)] AS country_code,
+        SAFE_CAST(AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(5)] AS FLOAT64)) AS FLOAT64) AS latitude,
+        SAFE_CAST(AVG(SAFE_CAST(SPLIT(SPLIT(V2Locations, ';')[SAFE_OFFSET(0)], '#')[SAFE_OFFSET(6)] AS FLOAT64)) AS FLOAT64) AS longitude,
         COUNT(*) AS total_events,
         SUM(CASE WHEN REGEXP_CONTAINS(V2Themes, r'(?i)(PROTEST|DEMONSTRATION|RIOT|STRIKE)') THEN 1 ELSE 0 END) AS protest_count,
         SUM(CASE WHEN REGEXP_CONTAINS(V2Themes, r'(?i)(CONFLICT|WAR|VIOLENCE|ATTACK)') THEN 1 ELSE 0 END) AS conflict_count,

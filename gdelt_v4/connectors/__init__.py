@@ -5,3 +5,4 @@ from gdelt_v4.connectors.unified import UnifiedConnector
 
 __all__ = ["BaseGDELTConnector", "UnifiedConnector"]
 
+
