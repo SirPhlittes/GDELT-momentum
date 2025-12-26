@@ -1,0 +1,28 @@
+# GDELT 2.0 Momentum Analysis Framework
+# ======================================
+
+# Core BigQuery integration
+google-cloud-bigquery>=3.11.0
+google-cloud-bigquery-storage>=2.24.0  # For faster DataFrame conversion
+db-dtypes>=1.2.0  # Required for BigQuery DataFrame conversion
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization (optional but recommended)
+plotly>=5.18.0
+streamlit>=1.28.0
+pydeck>=0.8.0  # 3D globe visualization (Gaia module)
+
+# Configuration
+pydantic>=2.0.0
+
+# Type hints support
+typing-extensions>=4.8.0
+
+# Development dependencies (optional)
+# pytest>=7.4.0
+# black>=23.0.0
+# mypy>=1.6.0
+
