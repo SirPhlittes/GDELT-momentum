@@ -883,13 +883,24 @@ def render_command_center_globe_fragment(
     without full app reload.
     """
     if globe_df.empty:
-        st.markdown("""
+        # v4.4: Layer-specific empty data messages
+        if layer_mode == LayerMode.CONFLICT_HUBS:
+            message = "NO CONFLICT EVENTS FOUND"
+            hint = "No protest/conflict themes detected in query results"
+        elif layer_mode == LayerMode.BIVARIATE_CRISIS:
+            message = "NO DATA FOR BIVARIATE ANALYSIS"
+            hint = "Ensure geo data with sentiment is available"
+        else:
+            message = "NO DATA FOR THIS FRAME"
+            hint = "Adjust temporal position or check query"
+        
+        st.markdown(f"""
         <div style="text-align: center; padding: 80px; background: #0A0A0A; border: 1px solid #2A2A2A; border-radius: 2px;">
             <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5A5A5A;">
-                NO DATA FOR THIS FRAME
+                {message}
             </div>
             <div style="font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #3A3A3A; margin-top: 8px;">
-                Adjust temporal position or check query
+                {hint}
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1077,21 +1088,53 @@ with tabs[1]:
             with col_main:
                 # v4.4: Globe rendering with Layer Selector and Fragment pattern
                 if pdk is not None:
-                    # Prepare source data
-                    source_df = frame.all_events if not frame.all_events.empty else geo_data
-                    
-                    # v4.3.1: Apply centroid fallback for missing coordinates
                     country_mapper = get_country_mapper()
-                    if "iso3" in source_df.columns:
-                        source_df = country_mapper.add_centroids_to_dataframe(
-                            source_df, 
-                            iso3_column="iso3",
-                            lat_column="latitude",
-                            lon_column="longitude",
-                            overwrite_zeros=True
-                        )
+                    
+                    # v4.4: Select data source based on layer mode
+                    if layer_mode == LayerMode.CONFLICT_HUBS:
+                        # Use conflict data for Conflict Hubs layer
+                        if first_result.has_conflict_data:
+                            source_df = first_result.conflict_data.copy()
+                            # Apply centroid fallback
+                            if "iso3" in source_df.columns:
+                                source_df = country_mapper.add_centroids_to_dataframe(
+                                    source_df, iso3_column="iso3",
+                                    lat_column="latitude", lon_column="longitude",
+                                    overwrite_zeros=True
+                                )
+                        else:
+                            # No conflict data available
+                            source_df = pd.DataFrame()
+                    else:
+                        # Standard geo data for Momentum and Bivariate modes
+                        source_df = frame.all_events if not frame.all_events.empty else geo_data
+                        
+                        # v4.3.1: Apply centroid fallback for missing coordinates
+                        if "iso3" in source_df.columns:
+                            source_df = country_mapper.add_centroids_to_dataframe(
+                                source_df, 
+                                iso3_column="iso3",
+                                lat_column="latitude",
+                                lon_column="longitude",
+                                overwrite_zeros=True
+                            )
                     
                     globe_df = prepare_geo_data_for_globe(source_df)
+                    
+                    # v4.4: Validate required columns before rendering
+                    if layer_mode == LayerMode.BIVARIATE_CRISIS:
+                        # Ensure momentum_zscore exists for Bivariate
+                        if "momentum_zscore" not in globe_df.columns and not globe_df.empty:
+                            globe_df["momentum_zscore"] = 0.0
+                        if "sentiment_score" not in globe_df.columns and not globe_df.empty:
+                            globe_df["sentiment_score"] = 0.0
+                    
+                    elif layer_mode == LayerMode.CONFLICT_HUBS:
+                        # Ensure conflict columns exist
+                        if "protest_count" not in globe_df.columns and not globe_df.empty:
+                            globe_df["protest_count"] = 0
+                        if "conflict_count" not in globe_df.columns and not globe_df.empty:
+                            globe_df["conflict_count"] = 0
                     
                     # v4.4: Render globe with fragment pattern for smooth updates
                     render_command_center_globe_fragment(

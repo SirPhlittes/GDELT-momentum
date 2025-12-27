@@ -335,6 +335,7 @@ class UnifiedResult:
     - Entity extraction
     - Source trust analysis
     - Momentum calculations
+    - v4.4: Conflict/protest event data
     
     All DataFrames use standardized column names.
     
@@ -346,6 +347,7 @@ class UnifiedResult:
         integrity: Integrity metrics (optional).
         experiments: List of experiment configurations.
         metadata: Additional result metadata.
+        _conflict_data: v4.4 Conflict events for Conflict Hubs layer.
     """
     time_series: TimeSeriesData
     geo_data: GeoData
@@ -354,6 +356,8 @@ class UnifiedResult:
     integrity: Optional[IntegrityMetrics] = None
     experiments: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # v4.4: Conflict data for Conflict Hubs layer
+    _conflict_data: pd.DataFrame = field(default_factory=pd.DataFrame)
     
     @property
     def has_entities(self) -> bool:
@@ -364,6 +368,16 @@ class UnifiedResult:
     def has_source_trust(self) -> bool:
         """Check if source trust data is available."""
         return self.source_trust is not None
+    
+    @property
+    def has_conflict_data(self) -> bool:
+        """v4.4: Check if conflict data is available."""
+        return self._conflict_data is not None and not self._conflict_data.empty
+    
+    @property
+    def conflict_data(self) -> pd.DataFrame:
+        """v4.4: Get conflict/protest event data."""
+        return self._conflict_data if self._conflict_data is not None else pd.DataFrame()
     
     def summary(self) -> Dict[str, Any]:
         """

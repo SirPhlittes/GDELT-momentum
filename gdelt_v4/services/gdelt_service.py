@@ -180,6 +180,27 @@ class GDELTService:
                 geo_df, "country_code", "iso3", add_name=True
             )
         
+        # v4.4 FIX: Process temporal_geo_df through the SAME pipeline as geo_df
+        # This was a critical disconnect in v4.3.1
+        if not temporal_geo_df.empty:
+            # 1. Convert country codes to ISO3 (critical for centroid fallback)
+            temporal_geo_df = self.country_mapper.convert_dataframe(
+                temporal_geo_df, "country_code", "iso3", add_name=True
+            )
+            
+            # 2. Calculate momentum Z-score per country (critical for Bivariate Matrix)
+            if calculate_momentum:
+                temporal_geo_df = self._calculate_temporal_geo_momentum(temporal_geo_df)
+        
+        # v4.4: Fetch conflict data for Conflict Hubs layer
+        conflict_df = pd.DataFrame()
+        if include_geo:
+            conflict_df = self._fetch_conflict_data(experiment)
+            if not conflict_df.empty:
+                conflict_df = self.country_mapper.convert_dataframe(
+                    conflict_df, "country_code", "iso3", add_name=True
+                )
+        
         # Build result
         # v4.3.1: Use temporal_geo_df as primary geo data for Chronos support
         # If temporal data is available, prefer it; otherwise fallback to aggregated
@@ -198,9 +219,14 @@ class GDELTService:
                 "include_geo": include_geo,
                 "include_entities": include_entities,
                 "include_source_trust": include_source_trust,
-                "has_temporal_geo": not temporal_geo_df.empty,  # v4.3.1
+                "has_temporal_geo": not temporal_geo_df.empty,
+                # v4.4: Conflict data for Conflict Hubs layer
+                "has_conflict_data": not conflict_df.empty,
             },
         )
+        
+        # v4.4: Attach conflict data to result for Layer Selector access
+        result._conflict_data = conflict_df
         
         logger.info(f"Analysis complete: {result.summary()}")
         
@@ -421,6 +447,99 @@ class GDELTService:
                 df["record_date"] = pd.to_datetime(df["record_date"])
         
         return df
+    
+    def _calculate_temporal_geo_momentum(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate momentum Z-score for temporal geo data.
+        
+        v4.4: This enables the Bivariate Crisis Matrix by adding momentum_zscore
+        to each country's daily geo data.
+        
+        Args:
+            df: DataFrame with record_date, country_code, mention_count
+            
+        Returns:
+            DataFrame with momentum_zscore column added per country
+        """
+        if df.empty or "mention_count" not in df.columns:
+            return df
+        
+        result = df.copy()
+        
+        # Calculate momentum per country based on their mention_count variance
+        if "iso3" in result.columns:
+            group_col = "iso3"
+        elif "country_code" in result.columns:
+            group_col = "country_code"
+        else:
+            # No grouping possible, calculate global momentum
+            mean_val = result["mention_count"].mean()
+            std_val = result["mention_count"].std()
+            if std_val > 0:
+                result["momentum_zscore"] = (result["mention_count"] - mean_val) / std_val
+            else:
+                result["momentum_zscore"] = 0.0
+            return result
+        
+        # Calculate per-country momentum
+        country_stats = result.groupby(group_col)["mention_count"].agg(["mean", "std"]).reset_index()
+        country_stats.columns = [group_col, "_mean", "_std"]
+        
+        result = result.merge(country_stats, on=group_col, how="left")
+        
+        # Z-score: (value - mean) / std
+        result["momentum_zscore"] = result.apply(
+            lambda row: (row["mention_count"] - row["_mean"]) / row["_std"] 
+            if row["_std"] > 0 else 0.0,
+            axis=1
+        )
+        
+        # Clean up temporary columns
+        result = result.drop(columns=["_mean", "_std"], errors="ignore")
+        
+        logger.debug(f"Calculated momentum for {len(result)} temporal geo records")
+        
+        return result
+    
+    def _fetch_conflict_data(self, experiment: BaseExperiment) -> pd.DataFrame:
+        """
+        Fetch conflict/protest event data for Conflict Hubs layer.
+        
+        v4.4: Executes the CONFLICT_EVENTS SQL template to retrieve
+        protest_count and conflict_count per country per day.
+        
+        Args:
+            experiment: The experiment configuration.
+            
+        Returns:
+            DataFrame with record_date, country_code, protest_count, 
+            conflict_count, total_events, lat, lon
+        """
+        try:
+            sql = self.query_builder.build_conflict_query(experiment)
+            df = self.connector.execute_query(sql)
+            
+            if not df.empty:
+                df["experiment_label"] = experiment.label
+                
+                # Ensure record_date is datetime
+                if "record_date" in df.columns:
+                    df["record_date"] = pd.to_datetime(df["record_date"])
+                
+                # Ensure numeric columns
+                for col in ["protest_count", "conflict_count", "total_events"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+                
+                logger.info(f"Fetched {len(df)} conflict events for {experiment.label}")
+            else:
+                logger.info(f"No conflict events found for {experiment.label}")
+            
+            return df
+            
+        except Exception as e:
+            logger.warning(f"Conflict data fetch failed: {e}")
+            return pd.DataFrame()
     
     def _fetch_entities(self, experiment: BaseExperiment) -> EntityData:
         """Fetch entity data for an experiment."""
